@@ -1,0 +1,23 @@
+flask_jwt_extended
+caslib.py
+# Flask-CAS
+# python-cas
+cachetools
+click
+dnspython
+docker
+docker-pycreds
+Flask
+Flask-HTTPAuth
+itsdangerous
+Jinja2
+MarkupSafe
+# MicroFlack_Common
+PyJWT
+python-dotenv
+python-etcd
+requests
+six
+urllib3
+websocket-client
+Werkzeug
