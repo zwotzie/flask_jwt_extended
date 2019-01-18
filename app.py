@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request, redirect
 from flask_jwt_extended import (
     JWTManager, jwt_required, jwt_refresh_token_required,
     create_access_token, create_refresh_token,
-    get_jwt_identity, get_jwt_claims,
+    get_jwt_identity, get_jwt_claims, get_raw_jwt,
     set_access_cookies, set_refresh_cookies, unset_jwt_cookies
 )
 from datetime import timedelta
@@ -66,6 +66,40 @@ app.config['JWT_SECRET_KEY'] = environ.get('JWT_SECRET_KEY', SECRET_KEY)  # FIXM
 
 jwt = JWTManager(app)
 
+class UserObject:
+    def __init__(self, user, loggedin, firstName, lastName, roles, rights, refresh_count=0):
+        self.user = user
+        self.loggedin = loggedin
+        self.firstName = firstName
+        self.lastName = lastName
+        self.roles = roles
+        self.rights = rights
+        self.refresh_count = refresh_count
+
+# Create a function that will be called whenever create_access_token
+# is used. It will take whatever object is passed into the
+# create_access_token method, and lets us define what custom claims
+# should be added to the access token.
+@jwt.user_claims_loader
+def add_claims_to_access_token(user):
+    return {'user': user.user,
+            'loggedin': user.loggedin,
+            'firstName': user.firstName,
+            'lastName': user.lastName,
+            'roles': user.roles,
+            'rights': user.rights,
+            'refresh_count': user.refresh_count
+            }
+
+
+# Create a function that will be called whenever create_access_token
+# is used. It will take whatever object is passed into the
+# create_access_token method, and lets us define what the identity
+# of the access token should be.
+@jwt.user_identity_loader
+def user_identity_lookup(user):
+    return user.user
+
 
 # Provide a method to create access tokens. The create_access_token()
 # function is used to actually generate the token, and you can return
@@ -90,25 +124,20 @@ def login():
     # display_name    = cas.attributes['cas:displayName']
     # cas_token       = cas.token
 
-    # Using the user_claims_loader, we can specify a method that will be
-    # called when creating access tokens, and add these claims to the said
-    # token. This method is passed the identity of who the token is being
-    # created for, and must return data that is json serializable
-    @jwt.user_claims_loader
-    def add_claims_to_access_token(identity):
-        return {
-            'user': identity,
-            'roles': ['bar', 'baz'],
-            'rights': ['foo', 'nix', 'all']
-        }
 
+    user = UserObject(user=username,
+                      loggedin=True,
+                      firstName='MyfirstName',
+                      lastName='MylastName',
+                      roles=['bar', 'baz'],
+                      rights=['foo', 'nix', 'all'],
+                      refresh_count=0)
     # expires = timedelta(minutes=11)
 
     # Create the tokens we will be sending back to the user
     # Identity can be any data that is json serializable
-    access_token  = create_access_token(identity=username, fresh=True) # , expires_delta=expires
-    refresh_token = create_refresh_token(identity=username) # , expires_delta=expires
-
+    access_token  = create_access_token(identity=user, fresh=True) # , expires_delta=expires
+    refresh_token = create_refresh_token(identity=user) # , expires_delta=expires
 
     resp = redirect("/token/protected?sendback=/test/location", code=302)
 
@@ -129,21 +158,34 @@ def login():
 
 # Same thing as login here, except we are only setting a new cookie
 # for the access token.
-@app.route('/token/refresh', methods=['GET'])
+@app.route('/token/refresh', methods=['GET', 'POST'])
 @jwt_refresh_token_required
+@jwt_required
 def refresh():
     # Create the new access token
-    current_user = get_jwt_identity()
+    current_identity = get_jwt_identity()
+    user_claims = get_jwt_claims()
 
-    @jwt.user_claims_loader
-    def add_claims_to_access_token(identity):
-        return get_jwt_claims()
+    print(type(user_claims)) # = dict
+    print(user_claims)
+    print(current_identity)
 
-    access_token = create_access_token(identity=current_user, fresh=False)
+    user = UserObject(user=current_identity,
+                      loggedin=user_claims['loggedin'],
+                      firstName=user_claims['firstName'],
+                      lastName=user_claims['lastName'],
+                      roles=user_claims['roles'],
+                      rights=user_claims['rights'],
+                      refresh_count=user_claims['refresh_count'] + 1)
+
+    access_token = create_access_token(identity=user, fresh=False)
+    refresh_token = create_refresh_token(identity=user)
 
     # Set the JWT access cookie in the response
     resp = jsonify({'refresh': True})
     set_access_cookies(resp, access_token)
+    set_refresh_cookies(resp, refresh_token)
+
     return resp, 200
 
 # Because the JWTs are stored in an httponly cookie now, we cannot
@@ -164,14 +206,23 @@ def logout():
 @jwt_required
 def protected():
     # Access the identity of the current user with get_jwt_identity
-    current_user = get_jwt_identity()
+    current_identity = get_jwt_identity()
 
-    claims = get_jwt_claims()
+    user_claims = get_jwt_claims()
 
     referrer = request.referrer
     redir_target = get_redirect_target()
 
-    return jsonify(logged_in_as=current_user, referrer=referrer, redir_target=redir_target, claims=claims), 200
+    return jsonify(jwt_identity=current_identity, referrer=referrer, redir_target=redir_target, jwt_claims=user_claims), 200
+
+# Protect a view with jwt_required, which requires a valid access token
+# in the request to access.
+@app.route('/token/raw_jwt', methods=['GET'])
+@jwt_required
+def show_raw():
+    # Access the identity of the current user with get_jwt_identity
+
+    return jsonify(get_raw_jwt()), 200
 
 
 @app.route('/token/redirect')
